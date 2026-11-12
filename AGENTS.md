@@ -1,8 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Source code: `src/` — key packages: `api/`, `handler/`, `models/`, `whatsapp/`, `utils/`, `config/`.
-- Application entrypoint: `app/main.py` (starts FastAPI, wiring DB, WhatsApp client).
+- Source code: `src/` — key packages: `api/`, `handler/`, `models/`, `whatsapp/`, `utils/`, `config/`, `llm/`, `scheduler/`, `group_admin/`, `summarize_and_send_to_groups/`.
+- Application entrypoint: `app/main.py` (starts FastAPI, wiring DB, WhatsApp client, summary scheduler). Group CLI: `app/cli.py`.
 - Migrations: `migrations/` with `alembic.ini`.
 - Tests are colocated with code: `src/**/test_*.py` (e.g., `src/whatsapp/test_jid.py`).
 - Extras: `notebooks/`, `data/`.
@@ -33,5 +33,6 @@
 - Gating: ensure `ruff`, `pyright`, and `pytest` pass locally.
 
 ## Security & Configuration Tips
-- Secrets live in `.env` (root). Required keys include: `DB_URI`, `WHATSAPP_HOST`, `VOYAGE_API_KEY`, `ANTHROPIC_API_KEY`, `LOGFIRE_TOKEN`.
+- Config lives in `.env` (root). Required keys: `DB_URI`, `WHATSAPP_HOST`. The LLM is a local Ollama server (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`); no cloud API keys are used.
+- Privacy invariants: never store direct messages or messages from groups that aren't enabled (`group.managed`), and exclude `message.sent_by_bot` rows from summaries.
 - DB migrations: `alembic upgrade head`; create new migration with `alembic revision --autogenerate -m "<msg>"`.

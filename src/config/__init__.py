@@ -1,17 +1,10 @@
-from os import environ
-from typing import Optional, Self
-
-from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from typing import Optional, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from whatsapp.jid import (
-    parse_jid,
-    JIDParseError,
-    DefaultUserServer,
-    LegacyUserServer,
-    GroupServer,
-)
+from apscheduler.triggers.cron import CronTrigger
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -27,72 +20,33 @@ class Settings(BaseSettings):
     whatsapp_basic_auth_password: Optional[str] = None
     whatsapp_basic_auth_user: Optional[str] = None
 
-    anthropic_api_key: str
+    # Local LLM (Ollama) settings
+    # Root URL of the Ollama server (without /v1).
+    ollama_base_url: str = "http://localhost:11434"
+    # Created from ollama/Modelfile (gemma4:e4b with a fixed context window).
+    ollama_model: str = "wa-summarizer"
+    llm_timeout_seconds: float = 600
+    llm_max_output_tokens: int = 3072
+    # Ask "thinking" models (e.g. qwen3) to answer directly. Set to false if
+    # your model or Ollama version rejects reasoning_effort="none".
+    llm_disable_thinking: bool = True
+    # Unload the model from RAM as soon as a summary run finishes.
+    unload_model_after_run: bool = True
 
-    # Voyage settings
-    voyage_api_key: str
-    voyage_max_retries: int = 5
-
-    # Model settings
-    model_name: str = "anthropic:claude-sonnet-4-6"
-
-    # Direct Message settings
-    dm_autoreply_enabled: bool = False
-    dm_autoreply_message: str = (
-        "Hello, I am not designed to answer to personal messages."
-    )
-
-    # QA tester settings (user JIDs allowed to use /kb_qa command)
-    qa_testers: list[str] = []
-
-    # QA test groups (group JIDs where /kb_qa command is allowed)
-    qa_test_groups: list[str] = []
+    # Scheduled summary settings
+    # Standard 5-field crontab expression. Empty string disables the scheduler.
+    summary_cron: str = "0 21 * * *"
+    summary_timezone: str = "Asia/Jerusalem"
+    # Groups with fewer new messages than this are skipped until the next run.
+    summary_min_messages: int = 15
+    # Max transcript size sent to the model in one request; longer chats are
+    # summarized in parts and then merged. Keep it well below the Ollama
+    # context length (OLLAMA_CONTEXT_LENGTH).
+    summary_chunk_max_chars: int = 12000
 
     # Optional settings
     debug: bool = False
     log_level: str = "INFO"
-    logfire_token: str
-
-    @field_validator("qa_testers")
-    @classmethod
-    def validate_qa_testers(cls, v: list[str]) -> list[str]:
-        """Validate that qa_testers contains valid user JIDs."""
-        valid_user_servers = (DefaultUserServer, LegacyUserServer)
-        for jid_str in v:
-            try:
-                jid = parse_jid(jid_str)
-            except JIDParseError as e:
-                raise ValueError(f"Invalid JID '{jid_str}': {e}") from e
-
-            if jid.server not in valid_user_servers:
-                raise ValueError(
-                    f"Invalid user JID '{jid_str}'. Expected server to be one of "
-                    f"{valid_user_servers}, got '{jid.server}'"
-                )
-            if not jid.user:
-                raise ValueError(f"Invalid user JID '{jid_str}'. Missing user part.")
-        return v
-
-    @field_validator("qa_test_groups")
-    @classmethod
-    def validate_qa_test_groups(cls, v: list[str]) -> list[str]:
-        """Validate that qa_test_groups contains valid group JIDs."""
-        for jid_str in v:
-            try:
-                jid = parse_jid(jid_str)
-            except JIDParseError as e:
-                raise ValueError(f"Invalid JID '{jid_str}': {e}") from e
-
-            if not jid.is_group():
-                raise ValueError(
-                    f"Invalid group JID '{jid_str}'. Expected server '{GroupServer}', "
-                    f"got '{jid.server}'"
-                )
-            if not jid.user:
-                raise ValueError(
-                    f"Invalid group JID '{jid_str}'. Missing group ID part."
-                )
-        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -103,12 +57,24 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def apply_env(self) -> Self:
-        if self.anthropic_api_key:
-            environ["ANTHROPIC_API_KEY"] = self.anthropic_api_key
+    def validate_schedule(self) -> Self:
+        try:
+            tz = ZoneInfo(self.summary_timezone)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(
+                f"Invalid SUMMARY_TIMEZONE '{self.summary_timezone}'"
+            ) from e
 
-        if self.logfire_token:
-            environ["LOGFIRE_TOKEN"] = self.logfire_token
+        if self.summary_cron.strip():
+            try:
+                CronTrigger.from_crontab(self.summary_cron, timezone=tz)
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid SUMMARY_CRON '{self.summary_cron}': {e}"
+                ) from e
+
+        if self.summary_chunk_max_chars < 1000:
+            raise ValueError("SUMMARY_CHUNK_MAX_CHARS must be at least 1000")
 
         return self
 

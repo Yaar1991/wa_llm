@@ -6,14 +6,16 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 import logging
-import logfire
 
-from api import load_new_kbtopics_api, status, summarize_and_send_to_group_api, webhook
+from api import status, summarize_and_send_to_group_api, webhook
 import models  # noqa
 from config import get_settings
 from whatsapp import WhatsAppClient
+from scheduler import create_summary_scheduler
+from summarize_and_send_to_groups import summarize_and_send_to_groups
 from whatsapp.init_groups import gather_groups
-from voyageai.client_async import AsyncClient
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -45,7 +47,6 @@ async def lifespan(app: FastAPI):
         pool_recycle=600,
         future=True,
     )
-    logfire.instrument_sqlalchemy(engine)
     async_session = async_sessionmaker(
         engine, expire_on_commit=False, class_=AsyncSession
     )
@@ -63,29 +64,38 @@ async def lifespan(app: FastAPI):
 
     app.state.db_engine = engine
     app.state.async_session = async_session
-    app.state.embedding_client = AsyncClient(
-        api_key=settings.voyage_api_key, max_retries=settings.voyage_max_retries
-    )
+
+    async def run_scheduled_summary() -> None:
+        async with async_session() as session:
+            try:
+                results = await summarize_and_send_to_groups(
+                    settings, session, app.state.whatsapp
+                )
+                logger.info("Scheduled summary run finished: %s", results)
+            except Exception:
+                logger.exception("Scheduled summary run failed")
+
+    scheduler = create_summary_scheduler(settings, run_scheduled_summary)
+    if scheduler:
+        scheduler.start()
+        for job in scheduler.get_jobs():
+            logger.info("Next scheduled summary run: %s", job.next_run_time)
+
     try:
         yield
     finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)
         await engine.dispose()
 
 
 # Initialize FastAPI app
 app = FastAPI(title="Webhook API", lifespan=lifespan)
 
-logfire.configure()
-logfire.instrument_pydantic_ai()
-logfire.instrument_fastapi(app)
-logfire.instrument_httpx(capture_all=True)
-logfire.instrument_system_metrics()
-
 
 app.include_router(webhook.router)
 app.include_router(status.router)
 app.include_router(summarize_and_send_to_group_api.router)
-app.include_router(load_new_kbtopics_api.router)
 
 if __name__ == "__main__":
     import uvicorn

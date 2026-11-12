@@ -9,7 +9,7 @@ services:
       file: docker-compose.base.yml
       service: whatsapp
     environment:
-      - WHATSAPP_WEBHOOK=http://host.docker.internal:8000/webhook
+      - WHATSAPP_WEBHOOK=http://host.docker.internal:${WEB_SERVER_HOST_PORT:-47320}/webhook
 
 volumes:
   wa_llm_whatsapp:

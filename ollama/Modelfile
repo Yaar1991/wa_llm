@@ -1,0 +1,14 @@
+# Local summarizer model for wa_llm.
+# Create it once (and again after changing this file):
+#   ollama pull gemma4:e4b
+#   ollama create wa-summarizer -f ollama/Modelfile
+# It shares the base model's files, so it takes no extra disk space.
+
+# Base model. gemma4:e4b writes good Hebrew but needs ~9.4 GB RAM while loaded;
+# gemma4:e2b is smaller.
+FROM gemma4:e4b
+
+# Context window. The OpenAI-compatible API can't set it per request, so it is
+# fixed here (survives reboots, unlike launchctl). Keep it above
+# SUMMARY_CHUNK_MAX_CHARS / 2 + LLM_MAX_OUTPUT_TOKENS.
+PARAMETER num_ctx 16384

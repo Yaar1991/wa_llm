@@ -29,20 +29,6 @@ async def test_webhook_to_message():
     assert message.group_jid == "123456789-123456@g.us"
 
 
-@pytest.mark.asyncio
-async def test_message_mentions(mock_session):
-    message = Message(
-        message_id="test_mention",
-        text="Hey @1234567890 check this out",
-        chat_jid="group@g.us",
-        sender_jid="sender@s.whatsapp.net",
-    )
-
-    assert message.has_mentioned("1234567890")
-    assert message.has_mentioned("1234567890@s.whatsapp.net")
-    assert not message.has_mentioned("9876543210@s.whatsapp.net")
-
-
 async def test_message_with_image(mock_session):
     # {'from': '972546660040:33@s.whatsapp.net in 972546660040@s.whatsapp.net',
     #  'image': {'media_path': 'statics/media/1739707428-82e94149-f7bf-4300-9621-70af93bda5a4.jpeg',

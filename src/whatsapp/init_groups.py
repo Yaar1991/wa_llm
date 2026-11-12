@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -6,12 +6,23 @@ from models import Group, BaseGroup, Sender, BaseSender, upsert
 from .client import WhatsAppClient
 
 
-async def gather_groups(session: AsyncSession, client: WhatsAppClient) -> None:
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+async def gather_groups(session: AsyncSession, client: WhatsAppClient) -> list[Group]:
+    """
+    Sync the groups this WhatsApp account is in into the `group` table.
+
+    Only group metadata is stored; existing enabled/disabled state is kept.
+    :return: the groups the account is currently in
+    """
     groups = await client.get_user_groups()
 
     if groups is None or groups.results is None:
-        return
+        return []
 
+    synced: list[Group] = []
     for g in groups.results.data:
         if not g.jid:
             continue
@@ -38,16 +49,17 @@ async def gather_groups(session: AsyncSession, client: WhatsAppClient) -> None:
                 else None,
                 last_ingest=existing_group.last_ingest
                 if existing_group
-                else datetime.now(),
+                else _utc_now_naive(),
                 last_summary_sync=existing_group.last_summary_sync
                 if existing_group
-                else datetime.now(),
+                else _utc_now_naive(),
                 notify_on_spam=existing_group.notify_on_spam
                 if existing_group
                 else False,
                 created_at=existing_group.created_at
                 if existing_group
-                else datetime.now(),
+                else datetime.now(timezone.utc),
             ).model_dump()
         )
-        await upsert(session, group)
+        synced.append(await upsert(session, group))
+    return synced

@@ -1,5 +1,5 @@
-from typing import List, TypeVar, cast
-from sqlalchemy import inspect
+from typing import Collection, List, TypeVar, cast
+from sqlalchemy import inspect, or_
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import SQLModel, select
@@ -10,7 +10,15 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 T = TypeVar("T", bound=SQLModel)
 
 
-async def upsert(session: AsyncSession, entity: T) -> T:
+async def upsert(
+    session: AsyncSession, entity: T, sticky_true: Collection[str] = ()
+) -> T:
+    """
+    Insert or update `entity` by primary key.
+
+    :param sticky_true: boolean columns that, once true in the DB, stay true on
+        update (the new value is OR-ed with the existing one).
+    """
     # Split fields into primary keys and values
     pkeys, vals = {}, {}
     mapper = inspect(entity.__class__)
@@ -24,7 +32,12 @@ async def upsert(session: AsyncSession, entity: T) -> T:
     stmt = stmt.on_conflict_do_update(
         index_elements=list(pkeys.keys()),  # Convert keys to list
         set_={
-            k: stmt.excluded[k]  # Use excluded to reference values from INSERT
+            # Use excluded to reference values from INSERT
+            k: (
+                or_(getattr(entity.__class__, k), stmt.excluded[k])
+                if k in sticky_true
+                else stmt.excluded[k]
+            )
             for k in vals.keys()  # Only update non-primary key columns
         },
     )

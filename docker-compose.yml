@@ -19,7 +19,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "${WEB_SERVER_HOST_PORT:-47320}:8000"
     depends_on:
       - postgres
       - whatsapp
@@ -27,6 +27,10 @@ services:
       - PORT=8000
       - DB_URI=postgresql+asyncpg://user:password@postgres:5432/postgres
       - WHATSAPP_HOST=http://whatsapp:3000
+      # Ollama runs natively on the Mac host (for GPU access), not in Docker
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   wa_llm_whatsapp:

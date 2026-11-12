@@ -7,7 +7,8 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: webhook_db
     ports:
-      - "5432:5432"
+      # Host ports use an uncommon range (473xx) to avoid clashes; override in .env.
+      - "${POSTGRES_HOST_PORT:-47322}:5432"
     volumes:
       - wa_llm_postgres:/var/lib/postgresql/data
     command: ["postgres", "-c", "log_statement=all"]
@@ -22,7 +23,7 @@ services:
     image: aldinokemal2104/go-whatsapp-web-multidevice:v8.11.0
     container_name: whatsapp
     ports:
-      - "3000:3000"
+      - "${WHATSAPP_HOST_PORT:-47321}:3000"
     restart: always
     depends_on:
       postgres:

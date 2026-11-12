@@ -5,7 +5,7 @@ from pydantic import field_validator, model_validator
 from sqlmodel import Field, Relationship, SQLModel, Column, DateTime
 
 
-from whatsapp.jid import normalize_jid, parse_jid, JID
+from whatsapp.jid import normalize_jid, parse_jid
 from gowa_sdk.webhooks import WebhookEnvelope, WebhookMessagePayload
 from .kb_topic_message import KBTopicMessage
 
@@ -33,6 +33,8 @@ class BaseMessage(SQLModel):
         default=None,
     )
     reply_to_id: Optional[str] = Field(default=None, nullable=True)
+    # True for messages this app sent (e.g. summaries); excluded from summaries.
+    sent_by_bot: bool = Field(default=False)
 
     @model_validator(mode="before")
     @classmethod
@@ -52,14 +54,6 @@ class BaseMessage(SQLModel):
     @classmethod
     def normalize(cls, value: Optional[str]) -> str | None:
         return normalize_jid(value) if value else None
-
-    def has_mentioned(self, jid: str | JID) -> bool:
-        if isinstance(jid, str):
-            jid = parse_jid(jid)
-
-        if not self.text:
-            return False
-        return f"@{jid.user}" in self.text
 
 
 class Message(BaseMessage, table=True):

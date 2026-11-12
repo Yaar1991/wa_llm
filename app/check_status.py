@@ -1,13 +1,12 @@
 import asyncio
 import logging
 import httpx
-import logfire
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class CheckStatusSettings(BaseSettings):
-    base_url: str = "http://localhost:8000"
+    base_url: str = "http://localhost:47320"
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -27,10 +26,6 @@ async def main():
         datefmt="%Y-%m-%d %H:%M:%S",
         level=logging.DEBUG,
     )
-    logfire.configure()
-    logfire.instrument_pydantic_ai()
-    logfire.instrument_httpx(capture_all=True)
-    logfire.instrument_system_metrics()
 
     try:
         # Create an async HTTP client and forward the message

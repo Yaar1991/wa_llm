@@ -3,10 +3,10 @@ from typing import Annotated, Dict, Any
 from fastapi import APIRouter, Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from config import Settings
+from config import Settings, get_settings
 from whatsapp import WhatsAppClient
 from summarize_and_send_to_groups import summarize_and_send_to_groups
-from .deps import get_db_async_session, get_whatsapp, get_settings
+from .deps import get_db_async_session, get_whatsapp
 
 # Create router for send summaries to groups endpoints
 router = APIRouter()
@@ -22,14 +22,13 @@ async def trigger_summarize_and_send_to_groups(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Dict[str, Any]:
     """
-    Trigger a send summaries to groups sync for all managed groups.
+    Run the scheduled summary job now, for all enabled groups.
 
-    This endpoint manually triggers the same process that runs
-    in the daily_summary.py script. It will:
-    1. Find all managed groups
-    2. Check for new messages since last summary
-    3. Generate AI summaries for groups with enough new messages
-    4. Send summaries to the groups and related community groups
+    It will:
+    1. Find all enabled groups
+    2. Collect new messages since the last summary (excluding bot messages)
+    3. Generate summaries with the local LLM for groups with enough new messages
+    4. Send each summary to its group
     5. Update the last_summary_sync timestamp
 
     Returns a success message upon completion.

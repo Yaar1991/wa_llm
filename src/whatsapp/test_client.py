@@ -70,6 +70,7 @@ async def test_get_my_jid_new_device_shape(
     jid = await client.get_my_jid()
     assert jid.user == "972545380874"
     assert jid.server == "s.whatsapp.net"
+    assert await client.get_my_name() == "llm.org.il"
 
 
 @pytest.mark.asyncio

@@ -6,21 +6,20 @@ requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
-    "cachetools>=7.1.4",
     "fastapi>=0.139.0",
     "httpx>=0.28.1",
-    "logfire[fastapi,httpx,sqlalchemy,system-metrics]>=4.37.0",
     "jinja2>=3.1.6",
     "pgvector>=0.5.0",
-    "pydantic-ai>=1.73.0",
     "pydantic-settings>=2.13.1",
     "pydantic>=2.13.4",
     "sqlalchemy[asyncio]>=2.0.51",
     "sqlmodel>=0.0.39",
     "tenacity>=9.1.4",
     "uvicorn>=0.50.2",
-    "voyageai>=0.4.1",
     "gowa>=0.1.0",
+    "pydantic-ai-slim[openai]>=2.67.0",
+    "apscheduler>=3.11.0,<4",
+    "tzdata>=2025.2",
 ]
 
 [dependency-groups]
@@ -90,9 +89,6 @@ typeCheckingMode = "basic"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 log_cli = true
-
-[tool.logfire]
-pydantic_plugin_record = "failure"
 
 [tool.poe.tasks]
 format = "ruff format"

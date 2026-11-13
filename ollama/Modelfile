@@ -1,12 +1,13 @@
 # Local summarizer model for wa_llm.
 # Create it once (and again after changing this file):
-#   ollama pull gemma4:e4b
+#   ollama pull gemma4:26b-a4b-it-qat
 #   ollama create wa-summarizer -f ollama/Modelfile
 # It shares the base model's files, so it takes no extra disk space.
 
-# Base model. gemma4:e4b writes good Hebrew but needs ~9.4 GB RAM while loaded;
-# gemma4:e2b is smaller.
-FROM gemma4:e4b
+# Base model: Gemma 4 26B mixture-of-experts (~4B parameters active per token),
+# quantization-aware 4-bit build. ~15 GB RAM while loaded, ~40 s per summary on
+# an M4. For less RAM, gemma4:e4b-it-qat (~6 GB) writes weaker summaries.
+FROM gemma4:26b-a4b-it-qat
 
 # Context window. The OpenAI-compatible API can't set it per request, so it is
 # fixed here (survives reboots, unlike launchctl). Keep it above

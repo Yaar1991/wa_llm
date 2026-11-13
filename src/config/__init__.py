@@ -1,9 +1,9 @@
 from functools import lru_cache
-from typing import Optional, Self
+from typing import Literal, Optional, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.triggers.cron import CronTrigger
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,17 +20,24 @@ class Settings(BaseSettings):
     whatsapp_basic_auth_password: Optional[str] = None
     whatsapp_basic_auth_user: Optional[str] = None
 
+    # Which LLM writes the summaries: "ollama" (local, the default) or "openai"
+    # (cloud). With "openai", each run's messages are sent to OpenAI's API.
+    llm_provider: Literal["ollama", "openai"] = "ollama"
+    openai_api_key: Optional[SecretStr] = None
+    # Must support reasoning effort "none" unless LLM_DISABLE_THINKING=false.
+    openai_model: str = "gpt-6-luna"
+
     # Local LLM (Ollama) settings
     # Root URL of the Ollama server (without /v1).
     ollama_base_url: str = "http://localhost:11434"
-    # Created from ollama/Modelfile (gemma4:e4b with a fixed context window).
+    # Created from ollama/Modelfile (Gemma 4 26B with a fixed context window).
     ollama_model: str = "wa-summarizer"
     llm_timeout_seconds: float = 600
     llm_max_output_tokens: int = 3072
     # Ask "thinking" models (e.g. qwen3) to answer directly. Set to false if
     # your model or Ollama version rejects reasoning_effort="none".
     llm_disable_thinking: bool = True
-    # Unload the model from RAM as soon as a summary run finishes.
+    # Unload the model from RAM as soon as a summary run finishes (Ollama only).
     unload_model_after_run: bool = True
 
     # Scheduled summary settings
@@ -72,6 +79,11 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"Invalid SUMMARY_CRON '{self.summary_cron}': {e}"
                 ) from e
+
+        if self.llm_provider == "openai" and not (
+            self.openai_api_key and self.openai_api_key.get_secret_value().strip()
+        ):
+            raise ValueError("LLM_PROVIDER=openai needs OPENAI_API_KEY to be set")
 
         if self.summary_chunk_max_chars < 1000:
             raise ValueError("SUMMARY_CHUNK_MAX_CHARS must be at least 1000")

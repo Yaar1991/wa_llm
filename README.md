@@ -52,20 +52,24 @@ Install Ollama, pull the base model, and create the bot's model from `ollama/Mod
 brew install ollama            # or install the app from ollama.com
 brew services start ollama     # or open the Ollama app
 
-ollama pull gemma4:e4b
+ollama pull gemma4:26b-a4b-it-qat
 ollama create wa-summarizer -f ollama/Modelfile
 ```
 
 The Modelfile fixes the context window, because the API the bot uses can't set it per request. The named model shares the base model's files, so it takes no extra disk space, and the setting survives reboots.
 
-While a summary runs, `ollama ps` shows the memory in use. The bot unloads the model as soon as the run finishes (`UNLOAD_MODEL_AFTER_RUN`).
+The bot unloads the model as soon as the run finishes (`UNLOAD_MODEL_AFTER_RUN`). To see the memory in use during a run, look at the `llama-server` process in Activity Monitor. For this model, `ollama ps` shows only working memory (under 1 GB), because the model file is memory-mapped.
 
-**Choosing a model.** To try another model, change the `FROM` line in `ollama/Modelfile` and run `ollama create` again. Measured on an M4 Mac mini with a Hebrew test chat:
+**Choosing a model.** To try another model, change the `FROM` line in `ollama/Modelfile` and run `ollama create` again. Measured on an M4 Mac mini (32 GB) summarizing the same 50 real Hebrew group messages, with a 16K context:
 
-| Model | RAM while loaded | Speed | Hebrew |
+| Model | RAM while loaded | Time per summary | Summaries |
 | --- | --- | --- | --- |
-| `gemma4:e4b` (default) | ~9.4 GB (context size barely matters) | ~7 s per summary | Natural; rarely drifts into another alphabet |
-| `qwen3:8b` | ~7.0 GB at 16K context, 9.4 GB at the 32K default | ~18 s per summary | Poor; drifts into Chinese/Arabic in most runs |
+| `gemma4:26b-a4b-it-qat` (default) | ~15 GB | ~30–40 s | Specific and well attributed; about one misspelled word per summary |
+| `gemma4:e4b` | ~9.4 GB | ~27 s | Vague; misattributes some points |
+| `gemma4:e4b-it-qat` | ~6.2 GB | ~30 s | Similar to `gemma4:e4b` |
+| `qwen3:8b` | ~7.0 GB | ~18 s | Drifts into Chinese/Arabic in most runs |
+
+In the same test, `LLM_PROVIDER=openai` with `gpt-6-luna` wrote the most accurate summaries, with no spelling mistakes, in about 15 s and for about $0.0004 per summary. It sends the chat to OpenAI.
 
 Some models occasionally slip characters from another alphabet (e.g. Chinese) into the Hebrew. The bot regenerates such output, up to three tries in total. If every try drifts, it removes the stray characters from the last one.
 
@@ -90,6 +94,9 @@ cp .env.example .env
 | `LOG_LEVEL`                    | Log level (`DEBUG`, `INFO`, `ERROR`)                                              | `INFO`                                                       |
 | `OLLAMA_BASE_URL`              | Ollama server root URL (Compose sets `http://host.docker.internal:11434`)         | `http://localhost:11434`                                     |
 | `OLLAMA_MODEL`                 | Ollama model name (created from `ollama/Modelfile`)                               | `wa-summarizer`                                              |
+| `LLM_PROVIDER`                 | `ollama` (local) or `openai` (sends each run's messages to OpenAI's API)          | `ollama`                                                     |
+| `OPENAI_API_KEY`               | OpenAI API key, required when `LLM_PROVIDER=openai`                               | (empty)                                                      |
+| `OPENAI_MODEL`                 | OpenAI model when `LLM_PROVIDER=openai`                                           | `gpt-6-luna`                                                 |
 | `LLM_DISABLE_THINKING`         | Ask thinking models to answer directly                                            | `true`                                                       |
 | `LLM_MAX_OUTPUT_TOKENS`        | Max tokens per model reply                                                        | `3072`                                                       |
 | `LLM_TIMEOUT_SECONDS`          | Timeout per model request                                                         | `600`                                                        |

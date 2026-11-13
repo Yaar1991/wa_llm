@@ -33,6 +33,6 @@
 - Gating: ensure `ruff`, `pyright`, and `pytest` pass locally.
 
 ## Security & Configuration Tips
-- Config lives in `.env` (root). Required keys: `DB_URI`, `WHATSAPP_HOST`. The LLM is a local Ollama server (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`); no cloud API keys are used.
+- Config lives in `.env` (root); `.env.example` lists every key. Required keys: `DB_URI`, `WHATSAPP_HOST`. The LLM defaults to a local Ollama server. `LLM_PROVIDER=openai` is an opt-in that sends group messages to OpenAI, so keep `ollama` the default in code, `.env.example` and Compose files.
 - Privacy invariants: never store direct messages or messages from groups that aren't enabled (`group.managed`), and exclude `message.sent_by_bot` rows from summaries.
 - DB migrations: `alembic upgrade head`; create new migration with `alembic revision --autogenerate -m "<msg>"`.

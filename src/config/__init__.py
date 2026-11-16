@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # summarized in parts and then merged. Keep it well below the Ollama
     # context length (OLLAMA_CONTEXT_LENGTH).
     summary_chunk_max_chars: int = 12000
+    # JSON file mapping display names to their Hebrew spelling in summaries.
+    # New names are added to it automatically. Empty string leaves names as is.
+    hebrew_names_file: str = "data/hebrew_names.json"
 
     # Optional settings
     debug: bool = False

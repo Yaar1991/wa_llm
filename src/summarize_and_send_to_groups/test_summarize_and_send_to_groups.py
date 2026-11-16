@@ -1,5 +1,7 @@
+import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from pydantic_ai.messages import (
@@ -20,6 +22,7 @@ from summarize_and_send_to_groups import (
     clean_output,
     introduced_scripts,
     pack_chunks,
+    resolve_hebrew_names,
     summarize,
     summarize_and_send_to_group,
     summarize_and_send_to_groups,
@@ -29,6 +32,8 @@ GROUP_JID = "123456789-123456@g.us"
 
 
 def _settings(**overrides) -> Settings:
+    # No Hebrew names file by default, so tests don't write to the repo.
+    overrides.setdefault("hebrew_names_file", "")
     return Settings(
         _env_file=None,  # type: ignore[call-arg]
         db_uri="postgresql+asyncpg://u:p@localhost/db",
@@ -143,7 +148,11 @@ async def test_summarize_and_send_to_group_sends_and_advances_clock(send_mock):
     )
 
     assert status == "sent"
-    send_mock.assert_awaited_once_with(GROUP_JID, "סיכום 1")
+    # The brief recap (second model call) goes out first, then the full summary.
+    assert send_mock.await_args_list == [
+        call(GROUP_JID, "*בקצרה:*\nסיכום 2"),
+        call(GROUP_JID, "סיכום 1"),
+    ]
     assert group.last_summary_sync > last_sync
     session.commit.assert_awaited_once()
 
@@ -278,3 +287,80 @@ async def test_summarize_uses_own_name_for_unnamed_owner():
     )
 
     assert "Yaar: I typed this" in recorder.calls[0][1]
+
+
+async def test_summarize_and_send_to_group_sends_full_summary_when_brief_fails(
+    monkeypatch: pytest.MonkeyPatch, send_mock
+):
+    monkeypatch.setattr(
+        summary_module, "summarize_brief", AsyncMock(side_effect=RuntimeError("llm"))
+    )
+    group = Group(group_jid=GROUP_JID, group_name="g", managed=True)
+    group.last_summary_sync = datetime(2026, 1, 1, 9, 0)
+
+    status = await summarize_and_send_to_group(
+        _settings(),
+        _session_returning(_messages(20)),
+        AsyncMock(),
+        group,
+        RecordingModel().model,
+        15,
+    )
+
+    assert status == "sent"
+    send_mock.assert_awaited_once_with(GROUP_JID, "סיכום 1")
+
+
+async def test_brief_recap_is_written_from_the_full_summary():
+    recorder = RecordingModel()
+
+    await summary_module.summarize_brief(
+        recorder.model, _settings(), "משפחה", "• דנה שאלה על הטיול"
+    )
+
+    system, user = recorder.calls[0]
+    assert "one very brief paragraph" in system and '"משפחה"' in system
+    assert user == "• דנה שאלה על הטיול"
+
+
+async def test_new_names_get_a_hebrew_spelling_saved_to_the_file(tmp_path: Path):
+    names_file = tmp_path / "names" / "hebrew_names.json"
+    settings = _settings(hebrew_names_file=str(names_file))
+    recorder = RecordingModel(reply="1. דנה\n")
+
+    result = await summarize(recorder.model, settings, "g", _messages(2))
+
+    assert json.loads(names_file.read_text(encoding="utf-8")) == {"Dana": "דנה"}
+    names_system, names_user = recorder.calls[0]
+    assert "Hebrew letters" in names_system and names_user == "1. Dana"
+    # The transcript the summary is written from already uses the Hebrew name.
+    assert "דנה: הודעה 0" in recorder.calls[1][1]
+    assert "Dana" not in recorder.calls[1][1]
+    assert result
+
+
+async def test_known_and_hebrew_names_need_no_model_call(tmp_path: Path):
+    names_file = tmp_path / "hebrew_names.json"
+    names_file.write_text(json.dumps({"Dana": "דנה"}), encoding="utf-8")
+    settings = _settings(hebrew_names_file=str(names_file))
+    recorder = RecordingModel()
+    hebrew = _messages(1)[0]
+    hebrew.sender = Sender(jid="222@s.whatsapp.net", push_name="יוסי")
+
+    names = await resolve_hebrew_names(
+        recorder.model, settings, [*_messages(2), hebrew]
+    )
+
+    assert names == {"Dana": "דנה"}
+    assert recorder.calls == []
+
+
+async def test_unusable_spelling_is_not_saved(tmp_path: Path):
+    names_file = tmp_path / "hebrew_names.json"
+    settings = _settings(hebrew_names_file=str(names_file))
+    recorder = RecordingModel(reply="1. Dana")
+
+    names = await resolve_hebrew_names(recorder.model, settings, _messages(1))
+
+    assert names == {}
+    assert not names_file.exists()

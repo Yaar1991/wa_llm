@@ -27,20 +27,27 @@ def render_reactions(reactions: List[Reaction]) -> str:
 
 
 def sender_display_name(
-    message: Message, fallback_names: Mapping[str, str] | None = None
+    message: Message,
+    fallback_names: Mapping[str, str] | None = None,
+    hebrew_names: Mapping[str, str] | None = None,
 ) -> str:
     """
     The sender's WhatsApp display name.
 
     Falls back to `fallback_names` (keyed by JID user part), then to a label
     with the last digits of the number, so a full phone number is never shown.
+    A name listed in `hebrew_names` is replaced by its Hebrew spelling.
     """
-    if message.sender and message.sender.push_name:
-        return message.sender.push_name
     user = parse_jid(message.sender_jid).user
-    if fallback_names and fallback_names.get(user):
-        return fallback_names[user]
-    return f"משתתף ...{user[-4:]}"
+    if message.sender and message.sender.push_name:
+        name = message.sender.push_name
+    elif fallback_names and fallback_names.get(user):
+        name = fallback_names[user]
+    else:
+        return f"משתתף ...{user[-4:]}"
+    if hebrew_names:
+        return hebrew_names.get(name.strip(), name)
+    return name
 
 
 def strip_mentions(text: str) -> str:
@@ -52,6 +59,7 @@ def chat_lines(
     history: List[Message],
     tz: tzinfo | None = None,
     fallback_names: Mapping[str, str] | None = None,
+    hebrew_names: Mapping[str, str] | None = None,
 ) -> List[str]:
     """
     Render messages as transcript lines: "<time> <name>: <text>".
@@ -60,7 +68,9 @@ def chat_lines(
     "@number" mentions inside the text are replaced with the name when known.
     """
     names = {
-        parse_jid(m.sender_jid).user: sender_display_name(m, fallback_names)
+        parse_jid(m.sender_jid).user: sender_display_name(
+            m, fallback_names, hebrew_names
+        )
         for m in history
     }
 
@@ -71,7 +81,7 @@ def chat_lines(
     for message in history:
         timestamp = message.timestamp.astimezone(tz) if tz else message.timestamp
         text = _MENTION_RE.sub(replace_mention, message.text or "")
-        name = sender_display_name(message, fallback_names)
+        name = sender_display_name(message, fallback_names, hebrew_names)
         line = f"{timestamp:%Y-%m-%d %H:%M} {name}: {text}"
 
         reaction_text = render_reactions(message.reactions)

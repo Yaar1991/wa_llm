@@ -16,6 +16,8 @@ services:
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
+      # Holds hebrew_names.json (not in git), so you can read and edit it
+      - ./data:/app/data
     env_file:
       - .env
     ports:

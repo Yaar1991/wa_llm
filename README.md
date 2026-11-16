@@ -13,9 +13,9 @@ A WhatsApp bot that runs on **your own WhatsApp number** as a linked device. It 
 - You link the WhatsApp service to your number as a companion device, the same way WhatsApp Web works.
 - You pick which groups to summarize with a CLI. Groups are disabled by default.
 - **Only enabled groups are stored.** Direct messages are never stored or answered. Messages from groups you haven't enabled are dropped before they reach the database.
-- On a schedule (one cron expression for all enabled groups), each enabled group with enough new messages gets a summary posted into it.
+- On a schedule (one cron expression for all enabled groups), each enabled group with enough new messages gets two messages posted into it: a very brief recap paragraph, then the full bullet-point summary.
 - The summary includes messages you typed yourself, but never messages the bot sent.
-- The bot never replies to messages and never @-tags anyone. People are referred to by their display names.
+- The bot never replies to messages and never @-tags anyone. People are referred to by their display names, written in Hebrew (see [Names in Hebrew](#names-in-hebrew)).
 - The model loads into RAM only for the summary run and is unloaded right after.
 
 ---
@@ -105,6 +105,7 @@ cp .env.example .env
 | `SUMMARY_TIMEZONE`             | Timezone for `SUMMARY_CRON` and transcript times                                  | `Asia/Jerusalem`                                             |
 | `SUMMARY_MIN_MESSAGES`         | Skip a group until it has at least this many new messages                         | `15`                                                         |
 | `SUMMARY_CHUNK_MAX_CHARS`      | Longer chats are summarized in parts of this size, then merged                    | `12000`                                                      |
+| `HEBREW_NAMES_FILE`            | JSON file with the Hebrew spelling of each display name. Empty leaves names as is. | `data/hebrew_names.json`                                     |
 
 Keep `SUMMARY_CHUNK_MAX_CHARS` plus the output budget well below the `num_ctx` in `ollama/Modelfile`. Hebrew uses roughly 2–3 characters per token.
 
@@ -151,6 +152,22 @@ docker compose exec web-server python app/cli.py summarize-now --min-messages 1
 ```
 
 When running the app on the host (`docker-compose.local-run.yml`), use `uv run python app/cli.py ...` instead.
+
+#### Names in Hebrew
+
+Summaries write people's names in Hebrew letters. The spelling of each name is kept in `data/hebrew_names.json`, which is not in git:
+
+```json
+{
+  "Dana Levi": "דנה לוי",
+  "Michael": "מיכאל"
+}
+```
+
+- The key is the person's WhatsApp display name, and the value is how summaries write it.
+- When someone whose name isn't in Hebrew writes for the first time, the model picks a spelling and adds it to the file. Later summaries reuse it.
+- To fix a spelling, edit the value. The next summary uses it; no restart is needed.
+- Names already written in Hebrew are used as they are and don't appear in the file.
 
 ### 6. API
 

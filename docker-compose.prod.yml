@@ -16,6 +16,9 @@ services:
   web-server:
     # Built from this fork: the upstream image still uses Anthropic/Voyage.
     build: .
+    volumes:
+      # Holds hebrew_names.json (not in git), so you can read and edit it
+      - ./data:/app/data
     env_file:
       - .env.prod
     ports:

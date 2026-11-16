@@ -58,3 +58,15 @@ def test_chat_lines_replace_known_mentions_with_names():
 def test_strip_mentions():
     assert strip_mentions("שלום @972501234567 ו-@123") == "שלום 972501234567 ו-123"
     assert strip_mentions("email me at a@b.com") == "email me at a@b.com"
+
+
+def test_chat_lines_use_hebrew_spelling_for_listed_names():
+    lines = chat_lines(
+        [
+            _message("1", "111", "Hello @222", push_name="John Doe"),
+            _message("2", "222", "Hi", push_name="Dana"),
+        ],
+        hebrew_names={"John Doe": "ג'ון דו"},
+    )
+    assert lines[0].endswith("ג'ון דו: Hello Dana")
+    assert lines[1].endswith("Dana: Hi")

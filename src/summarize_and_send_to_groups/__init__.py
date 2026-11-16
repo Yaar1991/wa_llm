@@ -21,7 +21,14 @@ from handler.base_handler import BaseHandler
 from llm import build_model, build_model_settings, unload_model
 from models import Group, Message
 from services.prompt_manager import prompt_manager
-from utils.chat_text import chat_lines, strip_mentions
+from utils.chat_text import chat_lines, sender_display_name, strip_mentions
+from utils.hebrew_names import (
+    load_names,
+    needs_hebrew,
+    numbered_list,
+    parse_numbered_names,
+    save_names,
+)
 from whatsapp import WhatsAppClient
 
 logger = logging.getLogger(__name__)
@@ -29,6 +36,8 @@ logger = logging.getLogger(__name__)
 SummaryStatus = Literal["sent", "skipped", "failed"]
 
 _NOTES_SEPARATOR = "\n\n---\n\n"
+# Shown above the short recap that is sent before the full summary.
+_BRIEF_HEADER = "*בקצרה:*"
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 # Alphabets small models sometimes drift into mid-sentence. An output may only
 # use one of these if the chat itself contains it.
@@ -144,6 +153,61 @@ async def _generate(
     return strip_scripts(output, drifted).strip()
 
 
+async def resolve_hebrew_names(
+    model: Model,
+    settings: Settings,
+    messages: list[Message],
+    fallback_names: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """
+    Hebrew spellings for the senders' display names, from `hebrew_names_file`.
+
+    Names that aren't in the file yet (and aren't already in Hebrew) get a
+    spelling from the model, which is saved to the file so it stays the same
+    in later summaries and can be corrected by hand.
+    """
+    path = settings.hebrew_names_file.strip()
+    if not path:
+        return {}
+
+    known = load_names(path)
+    senders = {sender_display_name(m, fallback_names).strip() for m in messages}
+    missing = sorted(n for n in senders if needs_hebrew(n) and n not in known)
+    if not missing:
+        return known
+
+    try:
+        reply = await _generate(
+            model, settings, "hebrew_names.j2", numbered_list(missing)
+        )
+    except Exception:
+        logger.exception("Could not get Hebrew spellings for new names")
+        return known
+
+    added = parse_numbered_names(missing, reply)
+    if len(added) < len(missing):
+        logger.warning(
+            "No Hebrew spelling for %d new name(s)", len(missing) - len(added)
+        )
+    if added:
+        known.update(added)
+        try:
+            save_names(path, known)
+            logger.info("Added %d name(s) to %s", len(added), path)
+        except OSError as e:
+            logger.warning("Could not save Hebrew names to %s: %s", path, e)
+    return known
+
+
+async def summarize_brief(
+    model: Model, settings: Settings, group_name: str, summary: str
+) -> str:
+    """Condense a full summary into one very brief Hebrew paragraph."""
+    return await _generate(
+        model, settings, "brief_summary.j2", summary, group_name=group_name
+    )
+
+
 async def summarize(
     model: Model,
     settings: Settings,
@@ -160,7 +224,10 @@ async def summarize(
         name isn't stored, e.g. the account owner.
     """
     max_chars = settings.summary_chunk_max_chars
-    lines = chat_lines(messages, ZoneInfo(settings.summary_timezone), fallback_names)
+    hebrew_names = await resolve_hebrew_names(model, settings, messages, fallback_names)
+    lines = chat_lines(
+        messages, ZoneInfo(settings.summary_timezone), fallback_names, hebrew_names
+    )
     chunks = pack_chunks(lines, max_chars)
 
     if len(chunks) == 1:
@@ -245,9 +312,21 @@ async def summarize_and_send_to_group(
         logger.warning("Model returned an empty summary for group %s", group_name)
         return "failed"
 
+    # The short recap is an extra: without it the full summary is still sent.
+    brief = ""
     try:
-        # Stores the sent summary flagged as sent_by_bot (inside a savepoint).
-        await BaseHandler(session, whatsapp).send_message(group.group_jid, summary)
+        brief = await summarize_brief(model, settings, group_name, summary)
+    except Exception:
+        logger.exception("Error writing the brief recap for group %s", group_name)
+    if not brief:
+        logger.warning("Sending only the full summary to group %s", group_name)
+
+    try:
+        # Stores what was sent flagged as sent_by_bot (inside a savepoint).
+        handler = BaseHandler(session, whatsapp)
+        if brief:
+            await handler.send_message(group.group_jid, f"{_BRIEF_HEADER}\n{brief}")
+        await handler.send_message(group.group_jid, summary)
     except Exception:
         logger.exception("Error sending summary to group %s", group_name)
         return "failed"

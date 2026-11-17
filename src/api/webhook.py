@@ -1,13 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Depends, Request
 
-from api.deps import get_db_async_session, get_handler, get_whatsapp
+from api.deps import get_handler
 from handler import MessageHandler
 from gowa_sdk.webhooks import WebhookEnvelope
-from whatsapp import WhatsAppClient
-from whatsapp.init_groups import gather_groups
+from whatsapp.group_sync import GroupSyncThrottle
 
 # Create router for webhook endpoints
 router = APIRouter(tags=["webhook"])
@@ -19,12 +17,16 @@ def is_group_sync_event(event: str) -> bool:
     return event.lower().startswith("group.")
 
 
+def get_group_sync(request: Request) -> GroupSyncThrottle:
+    assert request.app.state.group_sync, "Group sync not initialized"
+    return request.app.state.group_sync
+
+
 @router.post("/webhook")
 async def webhook(
     payload: WebhookEnvelope,
     handler: Annotated[MessageHandler, Depends(get_handler)],
-    session: Annotated[AsyncSession, Depends(get_db_async_session)],
-    whatsapp: Annotated[WhatsAppClient, Depends(get_whatsapp)],
+    group_sync: Annotated[GroupSyncThrottle, Depends(get_group_sync)],
 ) -> str:
     """
     WhatsApp webhook endpoint for receiving incoming messages.
@@ -37,8 +39,9 @@ async def webhook(
     if event in MESSAGE_EVENTS:
         await handler(payload)
 
-    # Keep GROUPS table in sync when group-related events happen
+    # Keep the GROUPS table in sync when group-related events happen. This runs
+    # in the background, at most once every few minutes (WhatsApp rate-limits it).
     if is_group_sync_event(event):
-        await gather_groups(session, whatsapp)
+        group_sync.request()
 
     return "ok"

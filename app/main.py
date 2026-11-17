@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 from warnings import warn
 
@@ -13,6 +12,7 @@ from config import get_settings
 from whatsapp import WhatsAppClient
 from scheduler import create_summary_scheduler
 from summarize_and_send_to_groups import summarize_and_send_to_groups
+from whatsapp.group_sync import GroupSyncThrottle
 from whatsapp.init_groups import gather_groups
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
         engine, expire_on_commit=False, class_=AsyncSession
     )
 
-    async def sync_groups_on_startup() -> None:
+    async def sync_groups() -> None:
         async with async_session() as session:
             try:
                 await gather_groups(session, app.state.whatsapp)
@@ -60,7 +60,11 @@ async def lifespan(app: FastAPI):
                 await session.rollback()
                 raise
 
-    asyncio.create_task(sync_groups_on_startup())
+    # Group events trigger a sync through this throttle, so a burst of events
+    # can't flood WhatsApp with group-list requests (it answers 429).
+    app.state.group_sync = GroupSyncThrottle(sync_groups)
+    # One sync shortly after startup.
+    app.state.group_sync.request()
 
     app.state.db_engine = engine
     app.state.async_session = async_session
@@ -86,6 +90,7 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler:
             scheduler.shutdown(wait=False)
+        await app.state.group_sync.aclose()
         await engine.dispose()
 
 

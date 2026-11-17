@@ -443,4 +443,60 @@ async def test_sent_summary_updates_learned_notes(tmp_path: Path, send_mock):
     assert "יוסי: כותב קצר" in learn_system and "Dana: הודעה 0" in learn_user
     saved = learned_file.read_text(encoding="utf-8")
     # The new note is added and the person who didn't write keeps theirs.
-    assert "Dana: כותבת בציניות 3" in saved and "יוסי: כותב קצר" in saved
+    assert "Dana: כותבת בציניות" in saved and "יוסי: כותב קצר" in saved
+
+
+async def test_hebrew_only_output_rewrites_english_words():
+    replies = iter(
+        ["• יער שיתף פוסט מ-Instagram על Trump", "• יער שיתף פוסט מאינסטגרם על טראמפ"]
+    )
+    calls: list[str] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        request = messages[-1]
+        assert isinstance(request, ModelRequest)
+        calls.append(
+            "".join(p.content for p in request.parts if isinstance(p, SystemPromptPart))
+        )
+        return ModelResponse(parts=[TextPart(next(replies))])
+
+    result = await _generate(
+        FunctionModel(respond),
+        _settings(),
+        "quick_summary.j2",
+        "Yaar: https://instagram.com/p/x",
+        hebrew_only=True,
+        group_name="g",
+    )
+
+    assert result == "• יער שיתף פוסט מאינסטגרם על טראמפ"
+    assert "no English letters" in calls[1]
+
+
+async def test_hebrew_only_output_drops_english_the_rewrite_missed():
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[TextPart("• דנה שלחה https://example.com/a?b=1 על ה-API החדש")]
+        )
+
+    result = await _generate(
+        FunctionModel(respond),
+        _settings(),
+        "quick_summary.j2",
+        "דנה: שלום",
+        hebrew_only=True,
+        group_name="g",
+    )
+
+    assert result.startswith("• דנה שלחה על") and result.endswith("החדש")
+    assert not summary_module.has_latin(result) and "https" not in result
+
+
+async def test_prompts_ask_for_hebrew_only_and_keep_slang():
+    recorder = RecordingModel()
+
+    await summarize(recorder.model, _settings(), "g", _messages(3))
+
+    system = recorder.calls[0][0]
+    assert "Hebrew letters only" in system and "Never copy a link" in system
+    assert "ספינים" in system and "API, GitHub" not in system

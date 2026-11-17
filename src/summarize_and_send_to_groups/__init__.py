@@ -75,6 +75,12 @@ _FOREIGN_SCRIPTS = {
 }
 # Extra generations allowed when an output drifts into another alphabet.
 _SCRIPT_ATTEMPTS = 3
+# Summaries are Hebrew only: no English letters, even where the chat uses them.
+_LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+_LATIN_WORD_RE = re.compile(
+    r"[^\s\u0590-\u05ff]*[A-Za-z\u00c0-\u024f][^\s\u0590-\u05ff]*"
+)
 # Only one summary run at a time per process (scheduler and API share it).
 _run_lock = asyncio.Lock()
 
@@ -149,13 +155,34 @@ async def _run_agent(
     return clean_output(result.output)
 
 
+def has_latin(text: str) -> bool:
+    return bool(_LATIN_RE.search(text))
+
+
+def strip_latin(text: str) -> str:
+    """Last resort: remove links and any words still in English letters."""
+    text = _LATIN_WORD_RE.sub("", _URL_RE.sub("", text))
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
 async def _generate(
-    model: Model, settings: Settings, template: str, content: str, **context
+    model: Model,
+    settings: Settings,
+    template: str,
+    content: str,
+    *,
+    hebrew_only: bool = False,
+    **context,
 ) -> str:
     """
     Generate text, regenerating when the model drifts into an alphabet the chat
     doesn't use (e.g. Chinese mid-sentence). As a last resort those characters
     are removed.
+
+    With `hebrew_only`, English letters left in the output (names, brands,
+    links) are rewritten into Hebrew by one extra short request, and whatever
+    is still left is removed.
     """
     system_prompt = prompt_manager.render(template, **context)
     output = ""
@@ -164,14 +191,34 @@ async def _generate(
         output = await _run_agent(model, settings, system_prompt, content)
         drifted = introduced_scripts(output, content)
         if not drifted:
-            return output
+            break
         logger.warning(
             "Output used unexpected alphabet(s) %s (attempt %d/%d)",
             sorted(drifted),
             attempt,
             _SCRIPT_ATTEMPTS,
         )
-    return strip_scripts(output, drifted).strip()
+    else:
+        output = strip_scripts(output, drifted).strip()
+
+    if hebrew_only and has_latin(output):
+        output = await _to_hebrew_only(model, settings, output)
+    return output
+
+
+async def _to_hebrew_only(model: Model, settings: Settings, text: str) -> str:
+    try:
+        fixed = await _generate(model, settings, "hebrew_only_fix.j2", text)
+    except Exception:
+        logger.exception("Could not rewrite English words into Hebrew")
+        fixed = ""
+    # A rewrite that lost most of the text is worse than a few removed words.
+    if not fixed or len(fixed) < len(text) // 2:
+        fixed = text
+    if has_latin(fixed):
+        logger.warning("Removing English words the model left in a summary")
+        fixed = strip_latin(fixed)
+    return fixed
 
 
 async def resolve_hebrew_names(
@@ -248,6 +295,7 @@ async def summarize_brief(
         settings,
         "brief_summary.j2",
         source,
+        hebrew_only=True,
         group_name=group_name,
         source=source_kind,
         participant_notes=participant_notes,
@@ -276,6 +324,7 @@ async def _summarize_full(
             settings,
             "quick_summary.j2",
             chunks[0],
+            hebrew_only=True,
             group_name=group_name,
             participant_notes=participant_notes,
         )
@@ -317,7 +366,12 @@ async def _summarize_full(
         ]
 
     full = await _generate(
-        model, settings, "merge_summaries.j2", content, group_name=group_name
+        model,
+        settings,
+        "merge_summaries.j2",
+        content,
+        hebrew_only=True,
+        group_name=group_name,
     )
     return (full, all_notes, "notes") if notes_fit else (full, full, "summary")
 

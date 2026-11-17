@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, Mapping
 from zoneinfo import ZoneInfo
@@ -29,11 +30,31 @@ from utils.hebrew_names import (
     parse_numbered_names,
     save_names,
 )
+from utils.participant_notes import (
+    combined_notes,
+    format_notes,
+    load_notes,
+    merge_learned,
+    save_learned,
+)
 from whatsapp import WhatsAppClient
 
 logger = logging.getLogger(__name__)
 
 SummaryStatus = Literal["sent", "skipped", "failed"]
+# What the brief recap is written from.
+BriefSource = Literal["transcript", "notes", "summary"]
+
+
+@dataclass
+class Summaries:
+    full: str
+    # Empty when the recap could not be written.
+    brief: str
+    # The material the recap was written from (also used to learn about people).
+    source: str
+    source_kind: BriefSource
+
 
 _NOTES_SEPARATOR = "\n\n---\n\n"
 # Shown above the short recap that is sent before the full summary.
@@ -199,30 +220,49 @@ async def resolve_hebrew_names(
     return known
 
 
-async def summarize_brief(
-    model: Model, settings: Settings, group_name: str, summary: str
-) -> str:
-    """Condense a full summary into one very brief Hebrew paragraph."""
-    return await _generate(
-        model, settings, "brief_summary.j2", summary, group_name=group_name
+def load_participant_notes(settings: Settings) -> tuple[dict[str, str], dict[str, str]]:
+    """Background notes about the group's people: (owner-written, model-learned)."""
+    return (
+        load_notes(settings.participant_notes_file.strip()),
+        load_notes(settings.learned_notes_file.strip()),
     )
 
 
-async def summarize(
+async def summarize_brief(
+    model: Model,
+    settings: Settings,
+    group_name: str,
+    source: str,
+    source_kind: BriefSource = "summary",
+    participant_notes: str = "",
+) -> str:
+    """
+    Write one very brief Hebrew paragraph about the whole period.
+
+    It is written from the transcript itself when that fits in one request
+    (otherwise from the notes about its parts), so the model can see how much
+    of the chat each discussion really took up.
+    """
+    return await _generate(
+        model,
+        settings,
+        "brief_summary.j2",
+        source,
+        group_name=group_name,
+        source=source_kind,
+        participant_notes=participant_notes,
+    )
+
+
+async def _summarize_full(
     model: Model,
     settings: Settings,
     group_name: str,
     messages: list[Message],
-    fallback_names: Mapping[str, str] | None = None,
-) -> str:
-    """
-    Summarize messages (chronological order) in Hebrew.
-
-    Transcripts larger than `summary_chunk_max_chars` are summarized in parts,
-    and the partial notes are then merged into one summary.
-    :param fallback_names: display names (by JID user part) for senders whose
-        name isn't stored, e.g. the account owner.
-    """
+    fallback_names: Mapping[str, str] | None,
+    participant_notes: str,
+) -> tuple[str, str, BriefSource]:
+    """:return: the full summary, and the material to write the brief recap from."""
     max_chars = settings.summary_chunk_max_chars
     hebrew_names = await resolve_hebrew_names(model, settings, messages, fallback_names)
     lines = chat_lines(
@@ -231,9 +271,15 @@ async def summarize(
     chunks = pack_chunks(lines, max_chars)
 
     if len(chunks) == 1:
-        return await _generate(
-            model, settings, "quick_summary.j2", chunks[0], group_name=group_name
+        full = await _generate(
+            model,
+            settings,
+            "quick_summary.j2",
+            chunks[0],
+            group_name=group_name,
+            participant_notes=participant_notes,
         )
+        return full, chunks[0], "transcript"
 
     logger.info("Summarizing %s in %d parts", group_name, len(chunks))
     notes = [
@@ -245,9 +291,13 @@ async def summarize(
             group_name=group_name,
             part=i,
             total=len(chunks),
+            participant_notes=participant_notes,
         )
         for i, chunk in enumerate(chunks, start=1)
     ]
+    # Notes on every part still show each topic's size; a merged summary doesn't.
+    all_notes = _NOTES_SEPARATOR.join(notes)
+    notes_fit = len(all_notes) <= max_chars
 
     # Merge the notes, in rounds if they don't fit in one request.
     while True:
@@ -266,9 +316,93 @@ async def summarize(
             for batch in batches
         ]
 
-    return await _generate(
+    full = await _generate(
         model, settings, "merge_summaries.j2", content, group_name=group_name
     )
+    return (full, all_notes, "notes") if notes_fit else (full, full, "summary")
+
+
+async def summarize(
+    model: Model,
+    settings: Settings,
+    group_name: str,
+    messages: list[Message],
+    fallback_names: Mapping[str, str] | None = None,
+) -> str:
+    """
+    Summarize messages (chronological order) in Hebrew.
+
+    Transcripts larger than `summary_chunk_max_chars` are summarized in parts,
+    and the partial notes are then merged into one summary.
+    :param fallback_names: display names (by JID user part) for senders whose
+        name isn't stored, e.g. the account owner.
+    """
+    notes = combined_notes(*load_participant_notes(settings))
+    full, _, _ = await _summarize_full(
+        model, settings, group_name, messages, fallback_names, notes
+    )
+    return full
+
+
+async def summarize_with_brief(
+    model: Model,
+    settings: Settings,
+    group_name: str,
+    messages: list[Message],
+    fallback_names: Mapping[str, str] | None = None,
+) -> Summaries:
+    """
+    The full summary plus a very brief recap of the same messages.
+
+    The recap is an extra: if it can't be written, `brief` is empty.
+    """
+    notes = combined_notes(*load_participant_notes(settings))
+    full, source, source_kind = await _summarize_full(
+        model, settings, group_name, messages, fallback_names, notes
+    )
+    brief = ""
+    if full:
+        try:
+            brief = await summarize_brief(
+                model, settings, group_name, source, source_kind, notes
+            )
+        except Exception:
+            logger.exception("Error writing the brief recap for group %s", group_name)
+    return Summaries(full=full, brief=brief, source=source, source_kind=source_kind)
+
+
+async def learn_about_participants(
+    model: Model,
+    settings: Settings,
+    group_name: str,
+    source: str,
+    source_kind: BriefSource,
+) -> None:
+    """
+    Let the model update its notes about how each person writes, from the chat
+    it just summarized. Best effort: a failure leaves the notes as they were.
+    """
+    path = settings.learned_notes_file.strip()
+    if not path:
+        return
+    owner, learned = load_participant_notes(settings)
+    try:
+        reply = await _generate(
+            model,
+            settings,
+            "learn_participants.j2",
+            source,
+            group_name=group_name,
+            source=source_kind,
+            owner_notes=format_notes(owner),
+            learned_notes=format_notes(learned),
+        )
+        updated = merge_learned(learned, reply)
+        if updated != learned:
+            save_learned(path, updated)
+            logger.info("Updated notes about %d participant(s)", len(updated))
+    except Exception:
+        logger.exception("Could not update participant notes for %s", group_name)
 
 
 async def summarize_and_send_to_group(
@@ -303,21 +437,17 @@ async def summarize_and_send_to_group(
         return "skipped"
 
     try:
-        summary = await summarize(model, settings, group_name, messages, fallback_names)
+        summaries = await summarize_with_brief(
+            model, settings, group_name, messages, fallback_names
+        )
     except Exception:
         logger.exception("Error summarizing group %s", group_name)
         return "failed"
 
+    summary, brief = summaries.full, summaries.brief
     if not summary:
         logger.warning("Model returned an empty summary for group %s", group_name)
         return "failed"
-
-    # The short recap is an extra: without it the full summary is still sent.
-    brief = ""
-    try:
-        brief = await summarize_brief(model, settings, group_name, summary)
-    except Exception:
-        logger.exception("Error writing the brief recap for group %s", group_name)
     if not brief:
         logger.warning("Sending only the full summary to group %s", group_name)
 
@@ -336,6 +466,10 @@ async def summarize_and_send_to_group(
     session.add(group)
     await session.commit()
     logger.info("Sent summary of %d messages to %s", len(messages), group_name)
+
+    await learn_about_participants(
+        model, settings, group_name, summaries.source, summaries.source_kind
+    )
     return "sent"
 
 

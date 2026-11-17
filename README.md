@@ -13,7 +13,7 @@ A WhatsApp bot that runs on **your own WhatsApp number** as a linked device. It 
 - You link the WhatsApp service to your number as a companion device, the same way WhatsApp Web works.
 - You pick which groups to summarize with a CLI. Groups are disabled by default.
 - **Only enabled groups are stored.** Direct messages are never stored or answered. Messages from groups you haven't enabled are dropped before they reach the database.
-- On a schedule (one cron expression for all enabled groups), each enabled group with enough new messages gets two messages posted into it: a very brief recap paragraph, then the full bullet-point summary.
+- On a schedule (one cron expression for all enabled groups), each enabled group with enough new messages gets two messages posted into it: a very brief recap paragraph that gives each discussion space in proportion to how big it was, then the full bullet-point summary.
 - The summary includes messages you typed yourself, but never messages the bot sent.
 - The bot never replies to messages and never @-tags anyone. People are referred to by their display names, written in Hebrew (see [Names in Hebrew](#names-in-hebrew)).
 - The model loads into RAM only for the summary run and is unloaded right after.
@@ -106,6 +106,8 @@ cp .env.example .env
 | `SUMMARY_MIN_MESSAGES`         | Skip a group until it has at least this many new messages                         | `15`                                                         |
 | `SUMMARY_CHUNK_MAX_CHARS`      | Longer chats are summarized in parts of this size, then merged                    | `12000`                                                      |
 | `HEBREW_NAMES_FILE`            | JSON file with the Hebrew spelling of each display name. Empty leaves names as is. | `data/hebrew_names.json`                                     |
+| `PARTICIPANT_NOTES_FILE`       | Your notes about the people in the group (see below). Empty disables.             | `data/participants.txt`                                      |
+| `LEARNED_NOTES_FILE`           | Notes the bot keeps about the people in the group. Empty disables learning.       | `data/participants_learned.txt`                              |
 
 Keep `SUMMARY_CHUNK_MAX_CHARS` plus the output budget well below the `num_ctx` in `ollama/Modelfile`. Hebrew uses roughly 2–3 characters per token.
 
@@ -168,6 +170,23 @@ Summaries write people's names in Hebrew letters. The spelling of each name is k
 - When someone whose name isn't in Hebrew writes for the first time, the model picks a spelling and adds it to the file. Later summaries reuse it.
 - To fix a spelling, edit the value. The next summary uses it; no restart is needed.
 - Names already written in Hebrew are used as they are and don't appear in the file.
+
+#### Notes about the people in the group
+
+Summaries read tone better (for example, sarcasm) when the model knows how each person usually writes. Two files in `data/` hold this background, one line per person in the form `<name>: <note>`:
+
+- `data/participants.txt` is yours. Create it and write whatever helps, for example:
+
+  ```text
+  # Lines starting with # are ignored. Use the name as it appears in summaries.
+  ניר: ימני. כותב הרבה בציניות; כשהוא "מסכים" עם השמאל או כותב "שמאלנים" במירכאות, זה בדרך כלל לעג.
+  מתן מור: שמאל-מרכז, כותב ברצינות ומביא כתבות וציטוטים.
+  ```
+
+- `data/participants_learned.txt` is written by the bot. After each summary it sends, the model updates its notes on how people write and which positions they keep coming back to. You can edit or delete its lines.
+- Your note about a person always wins over the learned one, and the bot is told never to contradict your notes.
+- The notes only help the model interpret messages. They are never quoted in summaries.
+- Both files are read on every run, so changes apply to the next summary without a restart.
 
 ### 6. API
 

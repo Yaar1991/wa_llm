@@ -34,6 +34,8 @@ GROUP_JID = "123456789-123456@g.us"
 def _settings(**overrides) -> Settings:
     # No Hebrew names file by default, so tests don't write to the repo.
     overrides.setdefault("hebrew_names_file", "")
+    overrides.setdefault("participant_notes_file", "")
+    overrides.setdefault("learned_notes_file", "")
     return Settings(
         _env_file=None,  # type: ignore[call-arg]
         db_uri="postgresql+asyncpg://u:p@localhost/db",
@@ -364,3 +366,81 @@ async def test_unusable_spelling_is_not_saved(tmp_path: Path):
 
     assert names == {}
     assert not names_file.exists()
+
+
+async def test_brief_recap_is_written_from_the_transcript_of_a_short_chat():
+    recorder = RecordingModel()
+
+    summaries = await summary_module.summarize_with_brief(
+        recorder.model, _settings(), "g", _messages(3)
+    )
+
+    assert (summaries.full, summaries.brief) == ("סיכום 1", "סיכום 2")
+    assert summaries.source_kind == "transcript"
+    brief_system, brief_user = recorder.calls[1]
+    assert "how much weight each discussion had" in brief_system
+    assert "Dana: הודעה 0" in brief_user
+
+
+async def test_brief_recap_of_a_long_chat_is_written_from_the_part_notes():
+    recorder = RecordingModel()
+    settings = _settings(summary_chunk_max_chars=1000)
+
+    summaries = await summary_module.summarize_with_brief(
+        recorder.model, settings, "g", _messages(60, text="x" * 40)
+    )
+
+    assert summaries.source_kind == "notes"
+    brief_system, brief_user = recorder.calls[-1]
+    assert "notes, written in Hebrew" in brief_system
+    assert "---" in brief_user
+
+
+async def test_prompts_cover_sarcasm_empty_shares_and_participant_notes(
+    tmp_path: Path,
+):
+    notes_file = tmp_path / "participants.txt"
+    notes_file.write_text(
+        "# a comment\nDana: sarcastic, mocks the coalition\nYossi:\n", encoding="utf-8"
+    )
+    learned_file = tmp_path / "learned.txt"
+    learned_file.write_text("Dana: learned note\nMike: short messages\n", "utf-8")
+    settings = _settings(
+        participant_notes_file=str(notes_file), learned_notes_file=str(learned_file)
+    )
+    recorder = RecordingModel()
+
+    await summarize(recorder.model, settings, "g", _messages(3))
+
+    system = recorder.calls[0][0]
+    assert "sarcastic message as the writer's real opinion" in system
+    assert "only says that something was shared" in system
+    # The owner's note wins over the learned one; empty notes are dropped.
+    assert "Dana: sarcastic, mocks the coalition" in system
+    assert "Mike: short messages" in system
+    assert "learned note" not in system and "Yossi" not in system
+
+
+async def test_sent_summary_updates_learned_notes(tmp_path: Path, send_mock):
+    learned_file = tmp_path / "learned.txt"
+    learned_file.write_text("יוסי: כותב קצר\n", encoding="utf-8")
+    settings = _settings(learned_notes_file=str(learned_file))
+    group = Group(group_jid=GROUP_JID, group_name="g", managed=True)
+    group.last_summary_sync = datetime(2026, 1, 1, 9, 0)
+    recorder = RecordingModel(reply="Dana: כותבת בציניות")
+
+    status = await summarize_and_send_to_group(
+        settings,
+        _session_returning(_messages(20)),
+        AsyncMock(),
+        group,
+        recorder.model,
+        15,
+    )
+
+    assert status == "sent"
+    learn_system, learn_user = recorder.calls[-1]
+    assert "יוסי: כותב קצר" in learn_system and "Dana: הודעה 0" in learn_user
+    saved = learned_file.read_text(encoding="utf-8")
+    # The new note is added and the person who didn't write keeps theirs.
+    assert "Dana: כותבת בציניות 3" in saved and "יוסי: כותב קצר" in saved

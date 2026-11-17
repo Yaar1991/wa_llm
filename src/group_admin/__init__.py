@@ -26,9 +26,8 @@ from llm import build_model, unload_model
 from models import Message
 from summarize_and_send_to_groups import (
     own_name_fallback,
-    summarize,
     summarize_and_send_to_groups,
-    summarize_brief,
+    summarize_with_brief,
     utc_now_naive,
 )
 from whatsapp import WhatsAppClient
@@ -236,19 +235,20 @@ async def cmd_preview(
 
     print(f"Summarizing the last {len(messages)} messages of '{name}'...\n")
     try:
-        model = build_model(settings)
-        summary = await summarize(
-            model,
+        summaries = await summarize_with_brief(
+            build_model(settings),
             settings,
             name,
             messages,
             await own_name_fallback(whatsapp),
         )
-        brief = await summarize_brief(model, settings, name, summary)
     finally:
         if settings.unload_model_after_run:
             await unload_model(settings)
-    print(f"--- Brief recap ---\n{brief}\n\n--- Full summary ---\n{summary}")
+    print(
+        f"--- Brief recap ---\n{summaries.brief or '(could not be written)'}\n\n"
+        f"--- Full summary ---\n{summaries.full}"
+    )
     print("\n(Preview only: nothing was sent to the group.)")
     return 0
 

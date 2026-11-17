@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # JSON file mapping display names to their Hebrew spelling in summaries.
     # New names are added to it automatically. Empty string leaves names as is.
     hebrew_names_file: str = "data/hebrew_names.json"
+    # Background about the people in the group ("<name>: <note>" lines) that
+    # helps the model read tone, e.g. sarcasm. You write the first file; the
+    # model keeps the second one up to date after each summary it sends.
+    # Empty string turns either one off.
+    participant_notes_file: str = "data/participants.txt"
+    learned_notes_file: str = "data/participants_learned.txt"
 
     # Optional settings
     debug: bool = False
